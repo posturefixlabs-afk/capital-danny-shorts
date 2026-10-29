@@ -77,6 +77,34 @@ def get_duration(path):
     r=subprocess.run(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(path)],check=True,capture_output=True,text=True)
     return max(1,float(r.stdout.strip()))
 
+def srt_time(seconds):
+    ms=max(0,int(round(seconds*1000)))
+    h,ms=divmod(ms,3600000); m,ms=divmod(ms,60000); sec,ms=divmod(ms,1000)
+    return f"{h:02d}:{m:02d}:{sec:02d},{ms:03d}"
+
+def make_captions(audio, srt_path):
+    # Word timestamps come from the actual synthesized audio, not scene durations.
+    from faster_whisper import WhisperModel
+    model=WhisperModel("tiny.en",device="cpu",compute_type="int8")
+    segments,_=model.transcribe(str(audio),word_timestamps=True,vad_filter=True,beam_size=3)
+    words=[]
+    for segment in segments:
+        for word in (segment.words or []):
+            token=word.word.strip()
+            if token and word.start is not None and word.end is not None:
+                words.append((float(word.start),float(word.end),token))
+    if not words:
+        raise RuntimeError("Speech recognition produced no caption timestamps.")
+    entries=[]
+    for i in range(0,len(words),6):
+        chunk=words[i:i+6]
+        entries.append((chunk[0][0],chunk[-1][1]," ".join(w[2] for w in chunk).strip()))
+    with srt_path.open("w",encoding="utf-8") as f:
+        for i,(start,end,text) in enumerate(entries,1):
+            safe=text.replace("-->","→")
+            f.write(f"{i}\\n{srt_time(start)} --> {srt_time(max(start+0.12,end))}\\n{safe}\\n\\n")
+    print(f"Created {len(entries)} synchronized caption cues from {len(words)} word timestamps.")
+
 def main():
     title,narration,scenes=get_inputs()
     OUT.mkdir(exist_ok=True); WORK.mkdir(exist_ok=True)
@@ -84,8 +112,11 @@ def main():
         if p.is_file(): p.unlink()
     txt=WORK/"narration.txt"; txt.write_text(narration,encoding="utf-8")
     audio=WORK/"narration.wav"
-    run(["espeak-ng","-v","en-us","-s","154","-f",str(txt),"-w",str(audio)])
-    total=get_duration(audio); wanted=sum(s["seconds"] for s in scenes)
+    # Neural Piper voice sounds more natural than the old espeak-ng voice.
+    run([sys.executable,"-m","piper","-m","en_US-lessac-medium","-f",str(audio),"--input-file",str(txt)])
+    total=get_duration(audio)
+    make_captions(audio,OUT/"captions.srt")
+    wanted=sum(s["seconds"] for s in scenes)
     durations=[total*s["seconds"]/wanted for s in scenes]
     credits=[]; clips=[]; font="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     for i,(s,secs) in enumerate(zip(scenes,durations),1):
@@ -96,14 +127,11 @@ def main():
                 verticalize(raw,img)
                 credits.append({"scene":i,"query":s["query"],"asset_title":found[0],"credit":found[1],"source_url":found[2],"status":"Check item-specific rights/credits before use"})
             except Exception:
-                fallback(img,s["caption"]); credits.append({"scene":i,"query":s["query"],"asset_title":"","credit":"Original abstract fallback","source_url":"","status":"fallback"})
+                fallback(img,""); credits.append({"scene":i,"query":s["query"],"asset_title":"","credit":"Original abstract fallback","source_url":"","status":"fallback"})
         else:
-            fallback(img,s["caption"]); credits.append({"scene":i,"query":s["query"],"asset_title":"","credit":"Original abstract fallback; no external image","source_url":"","status":"fallback"})
-        cap=WORK/f"caption_{i}.txt"; cap.write_text(str(s["caption"]).replace("\\","\\\\").replace("'","\\'"),encoding="utf-8")
+            fallback(img,""); credits.append({"scene":i,"query":s["query"],"asset_title":"","credit":"Original abstract fallback; no external image","source_url":"","status":"fallback"})
         vf=(f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
-            f"zoompan=z='min(zoom+0.00035,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps={FPS},"
-            f"drawbox=x=0:y=ih*0.72:w=iw:h=ih*0.28:color=black@0.50:t=fill,"
-            f"drawtext=fontfile={font}:textfile={cap}:fontcolor=white:fontsize=58:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h*0.79")
+            f"zoompan=z='min(zoom+0.00035,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps={FPS}")
         run(["ffmpeg","-hide_banner","-loglevel","error","-y","-loop","1","-framerate",str(FPS),"-i",str(img),"-vf",vf,"-t",f"{secs:.3f}","-an","-c:v","libx264","-preset","ultrafast","-crf","25","-pix_fmt","yuv420p","-r",str(FPS),"-movflags","+faststart",str(clip)])
         clips.append(clip)
     concat=WORK/"concat.txt"; concat.write_text("".join(f"file '{p.resolve()}'\n" for p in clips),encoding="utf-8")
@@ -111,7 +139,8 @@ def main():
     run(["ffmpeg","-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",str(concat),"-c","copy",str(video)])
     safe=re.sub(r"[^A-Za-z0-9_-]+","-",title).strip("-")[:70] or "capital-danny-short"
     final=OUT/f"{safe}.mp4"
-    run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(video),"-i",str(audio),"-map","0:v:0","-map","1:a:0","-c:v","copy","-c:a","aac","-b:a","128k","-shortest","-movflags","+faststart",str(final)])
+    subtitle_filter=f"subtitles={str((OUT/'captions.srt').resolve())}:force_style='FontName=DejaVu Sans,FontSize=52,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,BackColour=&H90000000,Outline=2,Shadow=0,Alignment=2,MarginV=300'"
+    run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(video),"-i",str(audio),"-map","0:v:0","-map","1:a:0","-vf",subtitle_filter,"-c:v","libx264","-preset","ultrafast","-crf","24","-pix_fmt","yuv420p","-c:a","aac","-b:a","128k","-shortest","-movflags","+faststart",str(final)])
     (OUT/"asset-credits.json").write_text(json.dumps(credits,indent=2,ensure_ascii=False),encoding="utf-8")
     with (OUT/"asset-credits.csv").open("w",newline="",encoding="utf-8") as f:
         w=csv.DictWriter(f,fieldnames=["scene","query","asset_title","credit","source_url","status"]); w.writeheader(); w.writerows(credits)
