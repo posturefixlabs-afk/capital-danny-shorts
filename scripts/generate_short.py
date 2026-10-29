@@ -102,7 +102,7 @@ def make_captions(audio, srt_path):
     with srt_path.open("w",encoding="utf-8") as f:
         for i,(start,end,text) in enumerate(entries,1):
             safe=text.replace("-->","→")
-            f.write(f"{i}\\n{srt_time(start)} --> {srt_time(max(start+0.12,end))}\\n{safe}\\n\\n")
+            f.write(f"{i}\n{srt_time(start)} --> {srt_time(max(start+0.12,end))}\n{safe}\n\n")
     print(f"Created {len(entries)} synchronized caption cues from {len(words)} word timestamps.")
 
 def main():
