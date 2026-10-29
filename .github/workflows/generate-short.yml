@@ -39,9 +39,10 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          python -m piper.download_voices en_US-lessac-medium
       - name: Render video
         run: python scripts/generate_short.py
       - name: Upload MP4 and credits
