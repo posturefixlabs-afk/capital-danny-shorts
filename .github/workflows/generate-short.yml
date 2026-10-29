@@ -1,0 +1,53 @@
+name: Generate a Short
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "Working title"
+        required: true
+        type: string
+        default: "What Would Happen If You Fell Into a Black Hole?"
+      narration:
+        description: "Full narration script"
+        required: true
+        type: string
+        default: "Imagine falling toward a black hole. Gravity bends light, making the stars and any glowing disk appear distorted. Then comes the event horizon: the point of no return. Cross it, and not even light can escape. But would you instantly stretch into spaghetti? Not necessarily. Near a smaller black hole, tidal forces could tear you apart before you reach the horizon. Near a supermassive black hole, you might cross the horizon without noticing anything special at that exact moment. What happens deeper inside? We still do not know for certain. Space is stranger than fiction."
+      scenes:
+        description: "One scene per line: seconds | NASA image search terms | short caption"
+        required: true
+        type: string
+        default: |
+          6 | black hole accretion disk | WHAT IF YOU FELL IN?
+          8 | black hole gravitational lensing stars | GRAVITY BENDS LIGHT
+          8 | black hole event horizon | THE POINT OF NO RETURN
+          10 | black hole tidal forces | IT DEPENDS ON THE BLACK HOLE
+          8 | supermassive black hole | SPACE IS STRANGER THAN FICTION
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Render video
+        run: python scripts/generate_short.py
+      - name: Upload MP4 and credits
+        uses: actions/upload-artifact@v4
+        with:
+          name: capital-danny-short
+          path: output/
+          if-no-files-found: error
+          retention-days: 7
